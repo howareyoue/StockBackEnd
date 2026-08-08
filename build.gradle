@@ -46,3 +46,14 @@ dependencies {
 tasks.named('test') {
 	useJUnitPlatform()
 }
+
+// ✅ 실행 가능한 jar(bootJar)만 남기고, 의존성 없는 plain jar는 아예 생성하지 않음.
+// Railway 배포 스크립트가 build/libs 안의 jar를 찾을 때 혼란 없이
+// 정확히 하나의(실행 가능한) jar만 있도록 강제한다.
+tasks.named('jar') {
+	enabled = false
+}
+
+tasks.named('bootJar') {
+	archiveClassifier = ''
+}
