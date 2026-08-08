@@ -53,7 +53,7 @@ tasks.named('test') {
 tasks.named('jar') {
 	enabled = false
 }
-
+// 코밋을 위한 테스트
 tasks.named('bootJar') {
 	archiveClassifier = ''
 }
