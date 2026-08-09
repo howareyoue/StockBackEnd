@@ -2,7 +2,6 @@ package com.stockai.client;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.net.URI;
@@ -16,15 +15,14 @@ import java.util.Map;
 @Component
 public class ClaudeApiClient {
 
-    // application.properties에서 구글 API 키를 읽어옵니다.
-    @Value("${google.api.key}")
-    private String apiKey;
+    // ✅ Spring의 ${...} 플레이스홀더 대신 System.getenv로 직접 읽는다.
+    // Railway의 Railpack 빌더가 application.properties 안의 ${GOOGLE_API_KEY} 패턴을
+    // "빌드 시점에 필요한 secret"으로 잘못 인식해서 빌드 자체를 막는 문제를 피하기 위함.
+    private final String apiKey = System.getenv("GOOGLE_API_KEY");
 
-    // 기본값을 무료 모델인 gemini-1.5-flash로 세팅합니다.
-    @Value("${google.api.model:gemini-1.5-flash}")
-    private String model;
+    private final String model = System.getenv().getOrDefault("GOOGLE_API_MODEL", "gemini-3.5-flash");
 
-    // ✅ 실제 Gemini generateContent 엔드포인트 형식으로 수정
+    // ✅ 실제 Gemini generateContent 엔드포인트 형식
     // {model} 자리에 모델명, key 쿼리 파라미터로 API 키를 전달해야 함
     private static final String API_URL_TEMPLATE =
             "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s";
