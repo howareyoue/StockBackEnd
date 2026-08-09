@@ -2,15 +2,14 @@ package com.stockai.service;
 
 import com.stockai.dto.LoginRequest;
 import com.stockai.dto.SignUpRequest;
-import com.stockai.entity.Role;
 import com.stockai.entity.User;
-import com.stockai.entity.UserStatus;
 import com.stockai.repository.UserRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.util.Optional;
@@ -40,9 +39,9 @@ class UserServiceTest {
 
         when(userRepository.findByUsername("unknown")).thenReturn(Optional.empty());
 
-        String result = userService.login(request);
+        ResponseEntity<?> result = userService.login(request);
 
-        assertEquals("존재하지 않는 아이디", result);
+        assertEquals("존재하지 않는 아이디", result.getBody());
         verify(userRepository).findByUsername("unknown");
     }
 
