@@ -618,7 +618,7 @@ public class StockService {
         double todayClose = priceVolume.get(0)[0];
         double todayOpen  = priceVolume.get(0)[1];
         double todayHigh  = priceVolume.get(0)[2];
-        double todayLow   = pricealVolume.get(0)[3];
+        double todayLow   = priceVolume.get(0)[3];
 
         double prevClose  = priceVolume.get(1)[0];
         double prevOpen   = priceVolume.get(1)[1];
