@@ -7,6 +7,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.DayOfWeek;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Set;
 
@@ -16,6 +17,10 @@ public class RecommendationBackfillService {
 
     private final RecommendationHistoryRepository recommendationHistoryRepository;
     private final ProfitCheckService profitCheckService;
+
+    // ✅ 서버 배포 환경(JVM 기본 타임존)이 UTC 등으로 설정돼 있어도
+    // 항상 한국 시간 기준으로 날짜를 판단하도록 고정
+    private static final ZoneId KST = ZoneId.of("Asia/Seoul");
 
     /**
      * TODO: StockScheduler와 동일하게 실제 공휴일 날짜를 채워야 합니다.
@@ -29,7 +34,7 @@ public class RecommendationBackfillService {
         List<RecommendationHistory> waitingList =
                 recommendationHistoryRepository.findAllByStatus("WAIT");
 
-        LocalDate today = LocalDate.now();
+        LocalDate today = LocalDate.now(KST);
 
         int updated = 0;
         int skipped = 0;

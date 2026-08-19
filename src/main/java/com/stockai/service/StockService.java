@@ -159,7 +159,10 @@ public class StockService {
             return false;
         }
 
-        return !time.isBefore(LocalTime.of(9, 0)) && time.isBefore(LocalTime.of(15, 30));
+        // ✅ 09:00~20:00을 장 운영시간으로 간주.
+        // 이 시간대에는 실시간(혹은 오늘자 캐시) 추천을 사용하고,
+        // 20:00~다음날 08:59에는 마지막으로 저장된 추천을 그대로 보여준다.
+        return !time.isBefore(LocalTime.of(9, 0)) && time.isBefore(LocalTime.of(20, 0));
     }
 
     private List<StockDto> getStoredRecommendations() {
@@ -615,7 +618,7 @@ public class StockService {
         double todayClose = priceVolume.get(0)[0];
         double todayOpen  = priceVolume.get(0)[1];
         double todayHigh  = priceVolume.get(0)[2];
-        double todayLow   = priceVolume.get(0)[3];
+        double todayLow   = pricealVolume.get(0)[3];
 
         double prevClose  = priceVolume.get(1)[0];
         double prevOpen   = priceVolume.get(1)[1];
