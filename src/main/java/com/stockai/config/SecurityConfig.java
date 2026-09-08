@@ -84,7 +84,8 @@ public class SecurityConfig {
         config.setAllowedOrigins(List.of(
                 "http://localhost:5173",
                 "http://127.0.0.1:5173",
-                "https://stock-front-end-three.vercel.app"
+                "https://stock-front-end-three.vercel.app",
+                "https://stock-front-fzsr9tk74-kyh4.vercel.app/"
         ));
 
         config.setAllowedMethods(List.of(
