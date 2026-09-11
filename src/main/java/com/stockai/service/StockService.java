@@ -72,7 +72,15 @@ public class StockService {
             stocks = getStoredRecommendations();
         } else {
             stocks = getTopStocks(today);
-            saveStockHistory(stocks);
+
+            // ✅ 크롤링 결과가 비어있으면(네트워크 실패, 페이지 구조 변경 등)
+            // 기존 캐시를 지우지 않고 그대로 유지한 채, 마지막으로 저장된 추천을 보여준다.
+            if (stocks.isEmpty()) {
+                System.out.println("=== 크롤링 결과가 비어있어 기존 캐시를 유지합니다 ===");
+                stocks = getStoredRecommendations();
+            } else {
+                saveStockHistory(stocks);
+            }
         }
 
         return Map.of(
@@ -93,7 +101,14 @@ public class StockService {
         LocalDate today = getCurrentDateForRecommendation();
 
         List<StockDto> stocks = getTopStocks(today);
-        saveStockHistory(stocks);
+
+        // ✅ 강제 새로고침이라도 크롤링이 비어있으면 기존 캐시를 지우지 않는다.
+        if (stocks.isEmpty()) {
+            System.out.println("=== 강제 새로고침 크롤링 결과가 비어있어 기존 캐시를 유지합니다 ===");
+            stocks = getStoredRecommendations();
+        } else {
+            saveStockHistory(stocks);
+        }
 
         return Map.of(
                 "market", "KOREA",
@@ -107,6 +122,7 @@ public class StockService {
         // ✅ 화면 표시용 캐시 테이블이므로 항상 "가장 최신 크롤링 결과 하나"만 남긴다.
         // 지우지 않고 계속 추가만 하면, 서로 다른 시점의 크롤링 배치가 뒤섞여
         // findTop20ByOrderByCreatedAtDesc()로 조회할 때 같은 종목이 여러 번 나올 수 있다.
+        // (주의: 이 메서드는 stocks가 비어있지 않을 때만 호출해야 한다. 호출부에서 보장.)
         stockHistoryRepository.deleteAll();
 
         List<StockHistory> historyList = stocks.stream()
@@ -342,8 +358,10 @@ public class StockService {
                 ? stocks.subList(0, MAX_RECOMMENDATIONS)
                 : stocks;
 
-        // ✅ 화면에 실제로 노출되는 상위 종목만 DB에 저장
-        saveRecommendationHistory(topStocks, recommendPriceMap, recommendationDate);
+        // ✅ 화면에 실제로 노출되는 상위 종목만 DB에 저장 (비어있지 않을 때만)
+        if (!topStocks.isEmpty()) {
+            saveRecommendationHistory(topStocks, recommendPriceMap, recommendationDate);
+        }
 
         return topStocks;
     }
