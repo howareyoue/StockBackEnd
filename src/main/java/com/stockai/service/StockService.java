@@ -242,6 +242,16 @@ public class StockService {
                     .timeout(10000)
                     .get();
 
+            // ✅ 진단용: 종목 목록 페이지에서 실제로 어떤 응답을 받았는지 확인
+            // (여기 rows가 0이면 아래 for문/getPriceAndVolume 자체가 호출되지 않으므로,
+            //  진단 로그는 반드시 이 지점에 있어야 한다.)
+            String bodyText = doc.body().text();
+            System.out.println("=== [목록페이지] title : " + doc.title());
+            System.out.println("=== [목록페이지] body 길이 : " + bodyText.length());
+            System.out.println("=== [목록페이지] body 앞부분 : "
+                    + bodyText.substring(0, Math.min(300, bodyText.length())));
+            System.out.println("=== [목록페이지] .type_2 존재 여부 : " + !doc.select(".type_2").isEmpty());
+
             Elements rows = doc.select(".type_2 tr");
 
             System.out.println("=== 크롤링 rows 수 : " + rows.size());
