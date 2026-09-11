@@ -38,8 +38,11 @@ public class StockService {
     private static final int MAX_RECOMMENDATIONS = 20;
 
     // ✅ 서버 배포 환경(JVM 기본 타임존)이 UTC 등으로 설정돼 있어도
-    // 항상 한국 시간 기준으로 장 운영시간을 판단하도록 고정
+    // 항상 한국 시간 기준으로 크롤링 허용 시간대를 판단하도록 고정
     private static final ZoneId KST = ZoneId.of("Asia/Seoul");
+
+    // ✅ 크롤링은 오직 이 시각 이후에만 허용한다 (그 이전 어떤 시간에 접속해도 크롤링하지 않음)
+    private static final LocalTime CRAWL_START_TIME = LocalTime.of(20, 0);
 
     private static final List<String> EXCLUDE_KEYWORDS = List.of(
             "ETF", "ETN", "레버리지", "인버스", "곱버스", "2X", "3X",
@@ -69,6 +72,8 @@ public class StockService {
         LocalTime now = LocalTime.now(KST);
 
         if (shouldUseStoredRecommendations(today, now)) {
+            // ✅ 08:00~15:30을 포함해 크롤링 허용 시간(20:00 이후)이 아니면
+            // 사용자가 언제 접속하든 절대 크롤링하지 않고 저장된 캐시만 보여준다.
             stocks = getStoredRecommendations();
         } else {
             stocks = getTopStocks(today);
@@ -92,7 +97,7 @@ public class StockService {
 
     /**
      * ✅ 관리자용 / 서버 시작 시 강제 새로고침.
-     * 장 운영시간/캐시 여부와 무관하게 즉시 새로 크롤링해서 저장한다.
+     * 크롤링 허용 시간대(20:00 이후) 여부와 무관하게 즉시 새로 크롤링해서 저장한다.
      * (테스트/디버깅 및 서버 기동 직후 즉시 데이터를 채우기 위한 용도)
      */
     @Transactional
@@ -149,9 +154,9 @@ public class StockService {
 
     boolean shouldUseStoredRecommendations(LocalDate date, LocalTime time) {
 
-        // 장이 닫혀 있으면 저장된 추천을 우선 사용한다.
-        // 이때 저장된 히스토리가 없어도 닫힌 시간대의 캐시 사용 여부를 true로 처리한다.
-        if (!isMarketOpen(date, time)) {
+        // ✅ 크롤링 허용 시간(평일 20:00 이후)이 아니면 무조건 캐시를 사용한다.
+        // 08:00~15:30을 포함한 그 외 모든 시간대는 여기서 걸러진다.
+        if (!isCrawlAllowed(date, time)) {
             return true;
         }
 
@@ -165,20 +170,23 @@ public class StockService {
         LocalDate lastRecommendDate =
                 history.get(0).getCreatedAt().toLocalDate();
 
-        // 오늘 이미 추천을 생성했다면 그대로 사용
+        // 오늘 이미(20:00 이후에) 추천을 생성했다면 그대로 사용하고, 아니면 다시 크롤링 시도
         return lastRecommendDate.equals(date);
     }
 
-    private boolean isMarketOpen(LocalDate date, LocalTime time) {
+    /**
+     * ✅ 크롤링이 허용되는 시간인지 판단한다.
+     * - 평일(월~금)이면서
+     * - 20:00 이후일 때만 true
+     * 08:00~15:30을 포함한 그 이전 시간에는 접속 여부와 무관하게 항상 false.
+     */
+    private boolean isCrawlAllowed(LocalDate date, LocalTime time) {
         DayOfWeek dayOfWeek = date.getDayOfWeek();
         if (dayOfWeek == DayOfWeek.SATURDAY || dayOfWeek == DayOfWeek.SUNDAY) {
             return false;
         }
 
-        // ✅ 09:00~20:00을 장 운영시간으로 간주.
-        // 이 시간대에는 실시간(혹은 오늘자 캐시) 추천을 사용하고,
-        // 20:00~다음날 08:59에는 마지막으로 저장된 추천을 그대로 보여준다.
-        return !time.isBefore(LocalTime.of(9, 0)) && time.isBefore(LocalTime.of(20, 0));
+        return !time.isBefore(CRAWL_START_TIME);
     }
 
     private List<StockDto> getStoredRecommendations() {
@@ -716,7 +724,10 @@ public class StockService {
         return String.join(" / ", reasons);
     }
 
+    /**
+     * ✅ 크롤링 허용 시간대(20:00 이후)면 "REALTIME", 아니면 "NEXTDAY"로 화면에 표시
+     */
     private String getMarketMode() {
-        return isMarketOpen(LocalDate.now(KST), LocalTime.now(KST)) ? "REALTIME" : "NEXTDAY";
+        return isCrawlAllowed(LocalDate.now(KST), LocalTime.now(KST)) ? "REALTIME" : "NEXTDAY";
     }
 }

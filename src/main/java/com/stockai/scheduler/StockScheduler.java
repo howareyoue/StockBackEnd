@@ -39,55 +39,31 @@ public class StockScheduler {
     );
 
     /**
-     * 평일 09:00 ~ 14:55 사이, 5분마다 실행.
-     * StockService.getRecommendedStocks() 내부에서 장 마감/휴장 여부와
+     * ✅ 크롤링은 평일 20:01 ~ 20:55, 5분마다만 시도한다.
+     * (20:00은 updateRecommendationResults()의 결과 확정과 겹치지 않도록 1분 뒤로 시작)
+     * StockService.getRecommendedStocks() 내부에서 "크롤링 허용 시간(20:00 이후)인지",
      * "오늘 이미 생성된 추천이 있는지"를 다시 판단하므로, 여기서는 그냥
-     * 주기적으로 호출만 해주면 된다.
+     * 주기적으로 호출만 해주면 된다. (첫 시도가 실패해도 5분 뒤 자동 재시도됨)
      */
-    @Scheduled(cron = "0 0/5 9-14 * * MON-FRI", zone = "Asia/Seoul")
+    @Scheduled(cron = "0 1-55/5 20 * * MON-FRI", zone = "Asia/Seoul")
     public void collectStocks() {
 
         System.out.println(
-                "========== 주식 수집 시작 =========="
+                "========== 주식 수집 시작(20:00 이후) =========="
         );
 
         stockService.getRecommendedStocks();
 
         System.out.println(
-                "========== 주식 수집 완료 =========="
-        );
-    }
-
-    /**
-     * 15시대(15:00~15:25)만 별도 cron으로 분리.
-     * 위 표현식(9-14)이 15시를 포함하지 않으므로, 15:30 마감 전까지만
-     * 돌리기 위해 15시 0~25분을 명시적으로 지정한다.
-     */
-    @Scheduled(cron = "0 0/5 15 * * MON-FRI", zone = "Asia/Seoul")
-    public void collectStocksAfternoon() {
-
-        // 15:30 마감 이후 값(15:30~15:55)은 건너뛴다.
-        int minute = java.time.LocalTime.now().getMinute();
-        if (minute > 25) {
-            return;
-        }
-
-        System.out.println(
-                "========== 주식 수집 시작(오후) =========="
-        );
-
-        stockService.getRecommendedStocks();
-
-        System.out.println(
-                "========== 주식 수집 완료(오후) =========="
+                "========== 주식 수집 완료(20:00 이후) =========="
         );
     }
 
     /**
      * 서버가 켜질 때마다 한 번, 그동안 20:00 스케줄을 놓쳐서
      * 밀려있는 WAIT 건이 있는지 확인하고 즉시 확정한다.
-     * (updateRecommendationResults() 내부에서 09:00~20:00 장 운영시간에는
-     *  자체적으로 스킵하므로, 여기서는 시간대를 따지지 않고 그냥 호출만 한다.)
+     * (updateRecommendationResults() 내부에서 자체적으로 시간대를 다시 판단하므로,
+     *  여기서는 시간대를 따지지 않고 그냥 호출만 한다.)
      */
     @EventListener(ApplicationReadyEvent.class)
     public void runOnStartup() {
