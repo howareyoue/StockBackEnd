@@ -4,6 +4,7 @@ import com.stockai.entity.StockHistory;
 import com.stockai.repository.StockHistoryRepository;
 import lombok.RequiredArgsConstructor;
 import com.stockai.dto.StockDto;
+import org.jsoup.Connection;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
@@ -44,6 +45,11 @@ public class StockService {
     // ✅ 크롤링은 오직 이 시각 이후에만 허용한다 (그 이전 어떤 시간에 접속해도 크롤링하지 않음)
     private static final LocalTime CRAWL_START_TIME = LocalTime.of(20, 0);
 
+    // ✅ 실제 크롬 브라우저에 가까운 User-Agent
+    private static final String BROWSER_USER_AGENT =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    + "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36";
+
     private static final List<String> EXCLUDE_KEYWORDS = List.of(
             "ETF", "ETN", "레버리지", "인버스", "곱버스", "2X", "3X",
             "선물", "KODEX", "TIGER", "KBSTAR", "KOSEF", "ARIRANG",
@@ -78,7 +84,7 @@ public class StockService {
         } else {
             stocks = getTopStocks(today);
 
-            // ✅ 크롤링 결과가 비어있으면(네트워크 실패, 페이지 구조 변경 등)
+            // ✅ 크롤링 결과가 비어있으면(네트워크 실패, 페이지 구조 변경, 봇 차단 등)
             // 기존 캐시를 지우지 않고 그대로 유지한 채, 마지막으로 저장된 추천을 보여준다.
             if (stocks.isEmpty()) {
                 System.out.println("=== 크롤링 결과가 비어있어 기존 캐시를 유지합니다 ===");
@@ -222,6 +228,44 @@ public class StockService {
         return LocalDate.now(clock);
     }
 
+    /**
+     * ✅ 네이버 페이지 요청 공통 헬퍼.
+     * - 실제 브라우저에 가까운 헤더를 채운다.
+     * - execute()로 응답을 받아서 상태코드/최종 URL을 직접 로그로 남긴다.
+     *   (리다이렉트가 조용히 따라가져서 로그인 페이지 등으로 바뀌는 경우를 바로 확인하기 위함)
+     */
+    private Document fetchDocument(String url, String logTag) throws IOException {
+
+        Connection.Response response = Jsoup.connect(url)
+                .userAgent(BROWSER_USER_AGENT)
+                .header("Referer", "https://finance.naver.com/")
+                .header("Accept",
+                        "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
+                .header("Accept-Language", "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7")
+                .header("Accept-Encoding", "gzip, deflate, br")
+                .header("Connection", "keep-alive")
+                .header("Upgrade-Insecure-Requests", "1")
+                .header("Cache-Control", "no-cache")
+                .timeout(10000)
+                .followRedirects(true)
+                .execute();
+
+        String finalUrl = response.url() != null ? response.url().toString() : "(알수없음)";
+
+        System.out.println("=== [" + logTag + "] 요청 URL : " + url);
+        System.out.println("=== [" + logTag + "] 응답 상태코드 : " + response.statusCode());
+        System.out.println("=== [" + logTag + "] 최종 URL (리다이렉트 반영) : " + finalUrl);
+
+        boolean redirectedToLogin = finalUrl.contains("nid.naver.com")
+                || finalUrl.contains("nidlogin");
+
+        if (redirectedToLogin) {
+            System.out.println("=== [" + logTag + "] ⚠ 네이버 로그인 페이지로 리다이렉트됨 (봇 차단 의심) ===");
+        }
+
+        return response.parse();
+    }
+
     private List<StockDto> getTopStocks(LocalDate recommendationDate) {
 
         List<StockDto> stocks = new ArrayList<>();
@@ -236,15 +280,8 @@ public class StockService {
 
             String url = "https://finance.naver.com/sise/sise_rise.naver";
 
-            Document doc = Jsoup.connect(url)
-                    .userAgent("Mozilla/5.0")
-                    .header("referer", "https://finance.naver.com")
-                    .timeout(10000)
-                    .get();
+            Document doc = fetchDocument(url, "목록페이지");
 
-            // ✅ 진단용: 종목 목록 페이지에서 실제로 어떤 응답을 받았는지 확인
-            // (여기 rows가 0이면 아래 for문/getPriceAndVolume 자체가 호출되지 않으므로,
-            //  진단 로그는 반드시 이 지점에 있어야 한다.)
             String bodyText = doc.body().text();
             System.out.println("=== [목록페이지] title : " + doc.title());
             System.out.println("=== [목록페이지] body 길이 : " + bodyText.length());
@@ -462,11 +499,7 @@ public class StockService {
             String url = "https://finance.naver.com/item/sise_day.naver?code=" + code
                     + "&page=" + page;
 
-            Document doc = Jsoup.connect(url)
-                    .userAgent("Mozilla/5.0")
-                    .header("referer", "https://finance.naver.com")
-                    .timeout(10000)
-                    .get();
+            Document doc = fetchDocument(url, "개별종목:" + code);
 
             Elements rows = doc.select("table.type2 tr");
 
