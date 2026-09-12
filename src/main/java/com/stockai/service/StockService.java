@@ -1,5 +1,7 @@
 package com.stockai.service;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.stockai.entity.StockHistory;
 import com.stockai.repository.StockHistoryRepository;
 import lombok.RequiredArgsConstructor;
@@ -9,8 +11,13 @@ import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.client.RestTemplate;
 import com.stockai.entity.RecommendationHistory;
 import com.stockai.repository.RecommendationHistoryRepository;
 
@@ -50,6 +57,16 @@ public class StockService {
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                     + "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36";
 
+    // ✅ 네이버 증권(stock.naver.com) 상승률 종목 목록 API
+    // (예전 finance.naver.com/sise/sise_rise.naver 정적 페이지가 stock.naver.com SPA로
+    //  개편되면서 더 이상 HTML 파싱이 불가능해져, 실제 화면이 호출하는 내부 API를 직접 호출한다)
+    private static final String RISING_STOCKS_API_URL =
+            "https://stock.naver.com/api/domestic/market/stock/default"
+                    + "?tradeType=KRX&marketType=ALL&orderType=up&startIdx=0&pageSize=100";
+
+    private final RestTemplate restTemplate = new RestTemplate();
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
     private static final List<String> EXCLUDE_KEYWORDS = List.of(
             "ETF", "ETN", "레버리지", "인버스", "곱버스", "2X", "3X",
             "선물", "KODEX", "TIGER", "KBSTAR", "KOSEF", "ARIRANG",
@@ -84,7 +101,7 @@ public class StockService {
         } else {
             stocks = getTopStocks(today);
 
-            // ✅ 크롤링 결과가 비어있으면(네트워크 실패, 페이지 구조 변경, 봇 차단 등)
+            // ✅ 크롤링 결과가 비어있으면(네트워크 실패, API 구조 변경 등)
             // 기존 캐시를 지우지 않고 그대로 유지한 채, 마지막으로 저장된 추천을 보여준다.
             if (stocks.isEmpty()) {
                 System.out.println("=== 크롤링 결과가 비어있어 기존 캐시를 유지합니다 ===");
@@ -229,41 +246,67 @@ public class StockService {
     }
 
     /**
-     * ✅ 네이버 페이지 요청 공통 헬퍼.
-     * - 실제 브라우저에 가까운 헤더를 채운다.
-     * - execute()로 응답을 받아서 상태코드/최종 URL을 직접 로그로 남긴다.
-     *   (리다이렉트가 조용히 따라가져서 로그인 페이지 등으로 바뀌는 경우를 바로 확인하기 위함)
+     * ✅ stock.naver.com 내부 JSON API에서 상승률 종목 목록을 가져온다.
+     * 반환값: [stockCode, stockName] 쌍의 리스트 (순서 = API가 준 순위 순서)
      */
-    private Document fetchDocument(String url, String logTag) throws IOException {
+    private List<String[]> fetchRisingStockList() {
 
-        Connection.Response response = Jsoup.connect(url)
-                .userAgent(BROWSER_USER_AGENT)
-                .header("Referer", "https://finance.naver.com/")
-                .header("Accept",
-                        "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
-                .header("Accept-Language", "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7")
-                .header("Accept-Encoding", "gzip, deflate, br")
-                .header("Connection", "keep-alive")
-                .header("Upgrade-Insecure-Requests", "1")
-                .header("Cache-Control", "no-cache")
-                .timeout(10000)
-                .followRedirects(true)
-                .execute();
+        List<String[]> result = new ArrayList<>();
 
-        String finalUrl = response.url() != null ? response.url().toString() : "(알수없음)";
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("User-Agent", BROWSER_USER_AGENT);
+        headers.set("Accept", "application/json, text/plain, */*");
+        headers.set("Referer", "https://stock.naver.com/market/stock/kr/stocklist/upper");
 
-        System.out.println("=== [" + logTag + "] 요청 URL : " + url);
-        System.out.println("=== [" + logTag + "] 응답 상태코드 : " + response.statusCode());
-        System.out.println("=== [" + logTag + "] 최종 URL (리다이렉트 반영) : " + finalUrl);
+        HttpEntity<Void> entity = new HttpEntity<>(headers);
 
-        boolean redirectedToLogin = finalUrl.contains("nid.naver.com")
-                || finalUrl.contains("nidlogin");
+        ResponseEntity<String> response = restTemplate.exchange(
+                RISING_STOCKS_API_URL,
+                HttpMethod.GET,
+                entity,
+                String.class
+        );
 
-        if (redirectedToLogin) {
-            System.out.println("=== [" + logTag + "] ⚠ 네이버 로그인 페이지로 리다이렉트됨 (봇 차단 의심) ===");
+        System.out.println("=== [상승률 API] 응답 상태코드 : " + response.getStatusCode());
+
+        String body = response.getBody();
+
+        if (body == null || body.isBlank()) {
+            System.out.println("=== [상승률 API] 응답 body가 비어있음 ===");
+            return result;
         }
 
-        return response.parse();
+        try {
+            JsonNode root = objectMapper.readTree(body);
+
+            // 응답이 배열이 아니라 { "list": [...] } 같은 래퍼 구조일 가능성도 있으므로 방어적으로 처리
+            JsonNode itemsNode = root.isArray() ? root : root.path("list");
+
+            if (!itemsNode.isArray()) {
+                System.out.println("=== [상승률 API] 예상한 배열 구조가 아님. 원본 앞부분 : "
+                        + body.substring(0, Math.min(300, body.length())));
+                return result;
+            }
+
+            for (JsonNode item : itemsNode) {
+                String code = item.path("itemcode").asText(null);
+                String name = item.path("itemname").asText(null);
+
+                if (code == null || name == null) {
+                    continue;
+                }
+
+                result.add(new String[]{code, name});
+            }
+
+            System.out.println("=== [상승률 API] 파싱된 종목 수 : " + result.size());
+
+        } catch (Exception e) {
+            System.out.println("=== [상승률 API] JSON 파싱 에러 : " + e.getMessage());
+            e.printStackTrace();
+        }
+
+        return result;
     }
 
     private List<StockDto> getTopStocks(LocalDate recommendationDate) {
@@ -278,125 +321,95 @@ public class StockService {
 
         try {
 
-            String url = "https://finance.naver.com/sise/sise_rise.naver";
+            List<String[]> risingStocks = fetchRisingStockList();
 
-            Document doc = fetchDocument(url, "목록페이지");
+            for (String[] item : risingStocks) {
 
-            String bodyText = doc.body().text();
-            System.out.println("=== [목록페이지] title : " + doc.title());
-            System.out.println("=== [목록페이지] body 길이 : " + bodyText.length());
-            System.out.println("=== [목록페이지] body 앞부분 : "
-                    + bodyText.substring(0, Math.min(300, bodyText.length())));
-            System.out.println("=== [목록페이지] .type_2 존재 여부 : " + !doc.select(".type_2").isEmpty());
+                String code = item[0];
+                String stockName = item[1];
 
-            Elements rows = doc.select(".type_2 tr");
-
-            System.out.println("=== 크롤링 rows 수 : " + rows.size());
-
-            for (Element row : rows) {
-
-                Elements tds = row.select("td");
-
-                if (tds.size() > 1) {
-
-                    Element link = row.selectFirst("a");
-
-                    if (link != null) {
-
-                        String stockName = link.text();
-                        String href = link.attr("href");
-
-                        if (!href.contains("=")) {
-                            continue;
-                        }
-
-                        if (isExcluded(stockName)) {
-                            System.out.println("=== 제외 종목 : " + stockName);
-                            continue;
-                        }
-
-                        String code = href.split("=")[1];
-
-                        // ✅ 이미 처리한 종목코드면 건너뛴다 (같은 종목이 여러 테이블/섹션에 중복 노출되는 문제 방지)
-                        if (processedCodes.contains(code)) {
-                            continue;
-                        }
-                        processedCodes.add(code);
-
-                        // ✅ [close, open, high, low, volume] 5개로 확장
-                        List<double[]> priceVolume = getPriceAndVolume(code, 120);
-
-                        if (priceVolume.size() < 10) {
-                            continue;
-                        }
-
-                        List<Double> closes = priceVolume.stream()
-                                .map(pv -> pv[0])
-                                .toList();
-
-                        List<Double> volumes = priceVolume.stream()
-                                .map(pv -> pv[4])
-                                .toList();
-
-                        // ✅ RSI: 최신순 데이터를 오래된순으로 뒤집어서 계산
-                        List<Double> closesAsc = new ArrayList<>(closes);
-                        java.util.Collections.reverse(closesAsc);
-                        double rsi = calculateRsi(closesAsc);
-                        int rsiScore = getRsiScore(rsi);
-
-                        // ✅ MACD도 오래된순으로 계산
-                        double[] macdResult = calculateMacd(closesAsc);
-                        double macdValue = macdResult[0];
-                        double macdSignalValue = macdResult[1];
-                        boolean goldenCross = macdValue > macdSignalValue && macdValue > 0;
-                        int macdScore = goldenCross ? 25 : 10;
-
-                        // ✅ 거래량 비율: 오늘 제외한 평균과 비교
-                        double volumeRate = calculateVolumeRate(volumes);
-                        int volumeScore = calculateVolumeScore(volumeRate);
-
-                        // ✅ 이평선 정배열도 오래된순 기준
-                        boolean maAlignment = isMaAlignment(closesAsc);
-                        int maScore = maAlignment ? 15 : 5;
-
-                        // ✅ 캔들 패턴: open/high/low/close 사용
-                        String candlePattern = detectCandlePattern(priceVolume);
-                        int candleScore = candlePattern.equals("없음") ? 0 : 10;
-
-                        int totalScore = rsiScore + macdScore + volumeScore + maScore + candleScore;
-
-                        String signal = getSignal(totalScore, rsi, macdValue);
-                        String reason = getReason(rsi, goldenCross, maAlignment, volumeRate, candlePattern);
-
-                        System.out.println(stockName
-                                + " RSI: " + rsi
-                                + " MACD: " + macdValue
-                                + " 거래량증가율: " + volumeRate
-                                + " 정배열: " + maAlignment
-                                + " 패턴: " + candlePattern
-                                + " 총점: " + totalScore
-                                + " 신호: " + signal);
-
-                        stocks.add(new StockDto(
-                                code,
-                                stockName,
-                                signal,
-                                totalScore,
-                                reason,
-                                rsi,
-                                macdValue,
-                                macdSignalValue,
-                                goldenCross,
-                                volumeRate,
-                                maAlignment,
-                                candlePattern
-                        ));
-
-                        // 추천 당시 종가는 최종 선정 후 저장할 때 쓰기 위해 매핑만 해둔다
-                        recommendPriceMap.put(code, closes.get(0));
-
-                    }
+                if (isExcluded(stockName)) {
+                    System.out.println("=== 제외 종목 : " + stockName);
+                    continue;
                 }
+
+                // ✅ 이미 처리한 종목코드면 건너뛴다
+                if (processedCodes.contains(code)) {
+                    continue;
+                }
+                processedCodes.add(code);
+
+                // ✅ [close, open, high, low, volume] 5개로 확장
+                List<double[]> priceVolume = getPriceAndVolume(code, 120);
+
+                if (priceVolume.size() < 10) {
+                    continue;
+                }
+
+                List<Double> closes = priceVolume.stream()
+                        .map(pv -> pv[0])
+                        .toList();
+
+                List<Double> volumes = priceVolume.stream()
+                        .map(pv -> pv[4])
+                        .toList();
+
+                // ✅ RSI: 최신순 데이터를 오래된순으로 뒤집어서 계산
+                List<Double> closesAsc = new ArrayList<>(closes);
+                java.util.Collections.reverse(closesAsc);
+                double rsi = calculateRsi(closesAsc);
+                int rsiScore = getRsiScore(rsi);
+
+                // ✅ MACD도 오래된순으로 계산
+                double[] macdResult = calculateMacd(closesAsc);
+                double macdValue = macdResult[0];
+                double macdSignalValue = macdResult[1];
+                boolean goldenCross = macdValue > macdSignalValue && macdValue > 0;
+                int macdScore = goldenCross ? 25 : 10;
+
+                // ✅ 거래량 비율: 오늘 제외한 평균과 비교
+                double volumeRate = calculateVolumeRate(volumes);
+                int volumeScore = calculateVolumeScore(volumeRate);
+
+                // ✅ 이평선 정배열도 오래된순 기준
+                boolean maAlignment = isMaAlignment(closesAsc);
+                int maScore = maAlignment ? 15 : 5;
+
+                // ✅ 캔들 패턴: open/high/low/close 사용
+                String candlePattern = detectCandlePattern(priceVolume);
+                int candleScore = candlePattern.equals("없음") ? 0 : 10;
+
+                int totalScore = rsiScore + macdScore + volumeScore + maScore + candleScore;
+
+                String signal = getSignal(totalScore, rsi, macdValue);
+                String reason = getReason(rsi, goldenCross, maAlignment, volumeRate, candlePattern);
+
+                System.out.println(stockName
+                        + " RSI: " + rsi
+                        + " MACD: " + macdValue
+                        + " 거래량증가율: " + volumeRate
+                        + " 정배열: " + maAlignment
+                        + " 패턴: " + candlePattern
+                        + " 총점: " + totalScore
+                        + " 신호: " + signal);
+
+                stocks.add(new StockDto(
+                        code,
+                        stockName,
+                        signal,
+                        totalScore,
+                        reason,
+                        rsi,
+                        macdValue,
+                        macdSignalValue,
+                        goldenCross,
+                        volumeRate,
+                        maAlignment,
+                        candlePattern
+                ));
+
+                // 추천 당시 종가는 최종 선정 후 저장할 때 쓰기 위해 매핑만 해둔다
+                recommendPriceMap.put(code, closes.get(0));
             }
 
             System.out.println("=== 최종 stocks 수 : " + stocks.size());
@@ -487,6 +500,10 @@ public class StockService {
     /**
      * ✅ [close, open, high, low, volume] 순서로 저장
      * 네이버 sise_day 컬럼 순서: 날짜(0), 종가(1), 전일비(2), 시가(3), 고가(4), 저가(5), 거래량(6)
+     *
+     * ⚠️ 이 부분은 finance.naver.com의 구형 페이지를 그대로 사용 중입니다.
+     * 목록 페이지(sise_rise.naver)처럼 stock.naver.com으로 리다이렉트되는지 반드시 확인이 필요합니다.
+     * 만약 이 페이지도 막혀있다면, 이 메서드도 stock.naver.com의 일별시세 API로 교체해야 합니다.
      */
     private List<double[]> getPriceAndVolume(String code, int targetCount) throws IOException {
 
@@ -499,7 +516,17 @@ public class StockService {
             String url = "https://finance.naver.com/item/sise_day.naver?code=" + code
                     + "&page=" + page;
 
-            Document doc = fetchDocument(url, "개별종목:" + code);
+            Connection.Response response = Jsoup.connect(url)
+                    .userAgent(BROWSER_USER_AGENT)
+                    .header("Referer", "https://finance.naver.com/")
+                    .header("Accept",
+                            "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
+                    .header("Accept-Language", "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7")
+                    .timeout(10000)
+                    .followRedirects(true)
+                    .execute();
+
+            Document doc = response.parse();
 
             Elements rows = doc.select("table.type2 tr");
 
